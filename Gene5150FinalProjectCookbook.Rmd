@@ -1,0 +1,168 @@
+---
+title: "GENE 5150 Final Project Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+
+```{r}
+
+.libPaths("C:/Users/james/AppData/Local/R/win-library/4.4")
+
+# Bioconductor packages (require BiocManager
+# List of core + WGCNA dependencies
+all_pkgs <- c(
+  "WGCNA", "dplyr", "readr", "DESeq2", "ggplot2", "pheatmap",
+  "GO.db", "impute", "dynamicTreeCut", "fastcluster"
+)
+
+# Install  packages
+for (pkg in all_pkgs) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    message("Installing: ", pkg)
+    BiocManager::install(pkg, ask = FALSE, update = FALSE)
+  }
+}
+BiocManager::install("preprocessCore", ask = FALSE)
+# Load all libraries
+library(WGCNA)
+library(dplyr)
+library(readr)
+library(DESeq2)
+library(ggplot2)
+library(pheatmap)
+```
+
+```{r}
+dir.create("qc_reports/raw", recursive = TRUE, showWarnings = FALSE)
+dir.create("qc_reports/trimmed", recursive = TRUE, showWarnings = FALSE)
+dir.create("aligned", showWarnings = FALSE)
+dir.create("counts", showWarnings = FALSE)
+
+```
+
+
+```{r}
+counts1 <- read.table('featureCounts_output.txt', header = TRUE, row.names = 1, comment.char = '#')
+metadata2 <- read.csv('metadata2.csv', header = TRUE, row.names = 1)
+```
+
+```{r}
+# Remove unwanted columns
+counts_clean1 <- counts1[, !(colnames(counts1) %in% c("Chr", "Start", "End", "Strand", "Length"))]
+colnames(counts_clean1) <- gsub("^.*SRR(174331[7-8][0-9]).*.bam$", "SRR\\1", colnames(counts_clean1))
+
+# Transpose the cleaned count matrix
+counts_transposed1 <- t(counts_clean1)
+```
+
+
+```{r}
+```
+
+
+```{r}
+dds <- DESeqDataSetFromMatrix(countData = counts_clean1,
+                              colData = metadata2,
+                              design = ~ cTreatment)
+## Subset your deseq objecta
+dds75 <-  dds[(rowSums(counts(dds)) >= 23)]
+
+### fix the base to a preferred column/result
+relevel(dds75$cTreatment, ref='WT')
+
+### Run deseq2
+
+deseq_ob <- DESeq(dds75)
+
+#### Save the results to a new object
+res <- results(deseq_ob, alpha = 0.05)
+```
+```{r}
+dds_norm <- vst(dds75)    ### This applies the normalization without running the whole DESEQ2 function
+norm_gene_exp <- assay(dds_norm) %>% t() ### WGCNA needs the data in a particular shape, make sure this matches it
+```
+```{r}
+### Print a volcano
+# Add a column to mark significance
+res$threshold <- as.factor(res$padj < 0.05 & abs(res$log2FoldChange) > 1)
+
+# Plot
+ggplot(res, aes(x=log2FoldChange, y=-log10(padj), color=threshold)) +
+  geom_point(alpha=0.6, size=1.5) +
+  scale_color_manual(values=c("grey", "red")) +
+  theme_minimal() +
+  labs(title="Volcano Plot", x="log2 Fold Change", y="-log10 Adjusted P-value") +
+  theme(legend.title=element_blank())
+```
+
+```{r}
+### Subset for a heatmap
+vsd <- vst(dds75, blind=FALSE) 
+# Subset by adjusted p-value and log2FC
+sig_genes <- res[which(res$padj < 0.05 & abs(res$log2FoldChange) > 1), ]
+# Keep top 30 genes by significance (optional)
+top_genes <- head(rownames(sig_genes[order(sig_genes$padj), ]), 30)
+mat <- assay(vsd)[top_genes, ]  # matrix of transformed counts
+mat <- mat - rowMeans(mat)      # optional: center the rows
+
+```
+
+```{r}
+### Print heatmap
+library(pheatmap)
+pheatmap(mat, 
+         cluster_rows=TRUE, 
+         cluster_cols=TRUE, 
+         show_rownames=TRUE, 
+         scale="row", 
+         fontsize=10,)
+```
+
+```{r}
+#install.packages("ggrepel")
+res$gene <- rownames(res)
+
+#library(ggrepel)  
+ggplot(res, aes(x = log2FoldChange, y = -log10(padj), color = threshold)) +
+  geom_point(alpha = 0.6, size = 1.5) +
+  scale_color_manual(values = c("grey", "red")) +
+  geom_text_repel(
+    data = subset(res, threshold == TRUE),
+    aes(label = gene),
+    size = 3,
+    max.overlaps = 15
+  ) +
+  theme_minimal() +
+  labs(title = "Volcano Plot", x = "log2 Fold Change", y = "-log10 Adjusted P-value") +
+  theme(legend.title = element_blank())
+```
+
+```{r}
+library(ggplot2)
+library(DESeq2)
+
+# Assuming you already have your DESeq2 results object: res
+
+# Add a column for significance (padj < 0.05 and |log2FC| > 1)
+res$significant <- factor(ifelse(res$padj < 0.05 & abs(res$log2FoldChange) > 1, "Significant", "Not Significant"))
+
+# Create a dataframe for plotting
+plot_data <- as.data.frame(res)
+
+# Calculate mean of normalized counts (baseMean already provided in DESeq2 results)
+ggplot(plot_data, aes(x=log10(baseMean + 1), y=log2FoldChange, color=significant)) +
+  geom_point(alpha=0.6, size=1.5) +
+  scale_color_manual(values=c("grey", "blue")) +
+  theme_minimal() +
+  labs(title="MA Plot of Differential Expression",
+       x="Log10 Mean Normalized Counts",
+       y="Log2 Fold Change",
+       color="Significance") +
+  geom_hline(yintercept=0, linetype="dashed", color="red") +
+  theme(legend.position = "right")
+```
+
